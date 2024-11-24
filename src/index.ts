@@ -1,28 +1,76 @@
-import { WebSocketServer ,WebSocket } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 
 const wss = new WebSocketServer({ port: 8080 });
 
-let clients: WebSocket[] = [];
+let userCount = 0;
+
+// Room-based socket storage
+interface RoomSockets {
+  [roomCode: string]: WebSocket[];
+}
+
+const allsocket: RoomSockets = {};
 
 wss.on("connection", (ws) => {
-    console.log("Client connected");
-    clients.push(ws);
-    ws.on("message", (message) => {
-        console.log(`Received message: ${message}`);
-        clients.forEach((client) => {
-            if (client !== ws) {
-                client.send(message);
-            }
-        });
-    });
-    ws.on("close", () => {
-        console.log("Client disconnected");
-        clients = clients.filter((client) => client !== ws);
-    });
-    ws.on("error", (error) => {
-        console.error("Error:", error);
-    });
+  userCount++;
+  console.log("Client connected #" + userCount);
+  ws.send(JSON.stringify({ type: "welcome", message: "Welcome to the WebSocket" }));
 
-    // Simulate some data being received from the client
-    ws.send("Hello from the server!");
+  ws.on("message", (rawMessage) => {
+    try {
+      const data = JSON.parse(rawMessage.toString());
+
+      if (data.type === "join") {
+        const roomCode = data.roomCode;
+
+        if (!allsocket[roomCode]) {
+          allsocket[roomCode] = [];
+        }
+
+        allsocket[roomCode].push(ws);
+        console.log(`Client joined room: ${roomCode}`);
+      } else if (data.type === "chat") {
+        const roomCode = data.roomCode;
+        const message = data.message;
+
+        if (allsocket[roomCode]) {
+          allsocket[roomCode].forEach((socket) => {
+            if (socket.readyState === WebSocket.OPEN) {
+              socket.send(
+                JSON.stringify({
+                  type: "chat",
+                  roomCode,
+                  content: message,
+                })
+              );
+            }
+          });
+        }
+      } else if (data.type === "leave") {
+        const roomCode = data.roomCode;
+
+        if (allsocket[roomCode]) {
+          const index = allsocket[roomCode].indexOf(ws);
+          if (index > -1) {
+            allsocket[roomCode].splice(index, 1);
+            console.log(`Client left room: ${roomCode}`);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error parsing message:", error);
+      ws.send(JSON.stringify({ type: "error", message: "Invalid message format" }));
+    }
+  });
+
+  ws.on("close", () => {
+    console.log("Client disconnected");
+    for (const roomCode in allsocket) {
+      const index = allsocket[roomCode].indexOf(ws);
+      if (index > -1) {
+        allsocket[roomCode].splice(index, 1);
+        console.log(`Removed client from room: ${roomCode}`);
+      }
+    }
+  });
 });
